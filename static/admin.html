@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barber Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .container {
+            max-width: 800px;
+        }
+
+        #login-section {
+            max-width: 400px;
+            margin: 50px auto;
+            text-align: center;
+        }
+
+        #dashboard-section {
+            display: none;
+        }
+
+        .logout-btn {
+            float: right;
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Login Section -->
+    <div id="login-section" class="card">
+        <h1>Staff Login</h1>
+        <form onsubmit="handleLogin(event)">
+            <input type="text" id="username" placeholder="Username" required
+                style="width: 100%; margin-bottom: 10px; padding: 10px;">
+            <input type="password" id="password" placeholder="Password" required
+                style="width: 100%; margin-bottom: 10px; padding: 10px;">
+            <button type="submit"
+                style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Login</button>
+        </form>
+        <p id="login-error" style="color: red; display: none; margin-top: 10px;"></p>
+    </div>
+
+    <!-- Dashboard Section -->
+    <div id="dashboard-section" class="container">
+        <div class="card">
+            <button class="logout-btn" onclick="logout()">Logout</button>
+            <h1>Admin Dashboard <span id="user-role-badge"
+                    style="font-size: 0.5em; background: #eee; padding: 2px 5px; border-radius: 4px;"></span></h1>
+
+            <div id="loading" style="text-align: center; color: var(--text-secondary);">Loading...</div>
+            <table id="appointments-table" style="display: none;">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Barber ID</th>
+                        <th>Customer</th>
+                        <th>Time</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="table-body">
+                    <!-- Rows here -->
+                </tbody>
+            </table>
+
+            <!-- Checks for Shifts (Owner Only) -->
+            <div id="owner-controls"
+                style="margin-top: 2rem; border-top: 1px solid #eee; padding-top: 1rem; display: none;">
+                <h2>Set Weekly Hours (Owner Only)</h2>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <label>Barber ID: <input type="number" id="shift-barber-id" placeholder="ID" value="1"
+                            style="width: 50px; padding: 5px;"></label>
+                    <select id="shift-day" style="padding: 5px;">
+                        <option value="0">Monday</option>
+                        <option value="1">Tuesday</option>
+                        <option value="2">Wednesday</option>
+                        <option value="3">Thursday</option>
+                        <option value="4">Friday</option>
+                        <option value="5">Saturday</option>
+                        <option value="6">Sunday</option>
+                    </select>
+                    <label>Start: <input type="number" id="shift-start" value="9" min="0" max="23"
+                            style="width: 50px; padding: 5px;"></label>
+                    <label>End: <input type="number" id="shift-end" value="17" min="0" max="23"
+                            style="width: 50px; padding: 5px;"></label>
+                    <button onclick="saveShift()"
+                        style="padding: 6px 12px; background: #28a745; color: white; border: none; cursor: pointer; border-radius: 4px;">Save
+                        Shift</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check for token on load
+        const token = localStorage.getItem('access_token');
+        if (token) {
+            showDashboard();
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorMsg = document.getElementById('login-error');
+
+            const formData = new URLSearchParams();
+            formData.append('username', username);
+            formData.append('password', password);
+
+            try {
+                const response = await fetch('/token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    localStorage.setItem('access_token', data.access_token);
+                    localStorage.setItem('user_role', data.role);
+                    showDashboard();
+                } else {
+                    errorMsg.innerText = "Invalid credentials";
+                    errorMsg.style.display = "block";
+                }
+            } catch (error) {
+                console.error(error);
+                errorMsg.innerText = "Login failed";
+                errorMsg.style.display = "block";
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('user_role');
+            location.reload();
+        }
+
+        function showDashboard() {
+            document.getElementById('login-section').style.display = 'none';
+            document.getElementById('dashboard-section').style.display = 'block';
+
+            const role = localStorage.getItem('user_role');
+            document.getElementById('user-role-badge').innerText = role.toUpperCase();
+
+            // RBAC UI Logic
+            if (role === 'owner') {
+                document.getElementById('owner-controls').style.display = 'block';
+            } else {
+                document.getElementById('owner-controls').style.display = 'none';
+            }
+
+            loadAppointments();
+        }
+
+        async function saveShift() {
+            const barberId = document.getElementById('shift-barber-id').value;
+            const day = document.getElementById('shift-day').value;
+            const start = document.getElementById('shift-start').value;
+            const end = document.getElementById('shift-end').value;
+            const token = localStorage.getItem('access_token');
+
+            try {
+                const response = await fetch('/shifts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: JSON.stringify({
+                        barber_id: parseInt(barberId),
+                        weekday: parseInt(day),
+                        start_hour: parseInt(start),
+                        end_hour: parseInt(end)
+                    })
+                });
+
+                if (response.ok) {
+                    alert('Shift saved!');
+                } else {
+                    alert('Error saving shift');
+                }
+            } catch (error) {
+                console.error(error);
+                alert('Error submitting shift');
+            }
+        }
+
+        async function loadAppointments() {
+            const token = localStorage.getItem('access_token');
+            try {
+                const response = await fetch('/appointments', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+
+                if (response.status === 401) {
+                    logout();
+                    return;
+                }
+
+                const appts = await response.json();
+
+                const tbody = document.getElementById('table-body');
+                tbody.innerHTML = '';
+
+                appts.forEach(appt => {
+                    const tr = document.createElement('tr');
+                    let deleteBtn = '';
+                    // Only owner can delete
+                    if (localStorage.getItem('user_role') === 'owner') {
+                        deleteBtn = `<td><button class="btn-delete" onclick="deleteAppt(${appt.id})">Delete</button></td>`;
+                    } else {
+                        deleteBtn = `<td>-</td>`;
+                    }
+
+                    tr.innerHTML = `
+                        <td>${appt.id}</td>
+                        <td>${appt.barber_id}</td>
+                        <td>${appt.customer_name}</td>
+                        <td>${new Date(appt.time_slot).toLocaleString()}</td>
+                        ${deleteBtn}
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('appointments-table').style.display = 'table';
+            } catch (error) {
+                console.error(error);
+                document.getElementById('loading').innerText = 'Error loading appointments.';
+            }
+        }
+
+        async function deleteAppt(id) {
+            if (!confirm('Are you sure?')) return;
+            const token = localStorage.getItem('access_token');
+
+            try {
+                const response = await fetch(`/appointments/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (response.ok) {
+                    loadAppointments();
+                } else {
+                    alert('Failed to delete');
+                }
+            } catch (error) {
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+
+</html>
