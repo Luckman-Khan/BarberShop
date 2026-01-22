@@ -24,7 +24,7 @@ app = FastAPI()
 # Allow CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -161,7 +161,7 @@ def get_slots(barber_id: int, date: str, session: Session = Depends(get_session)
     return get_smart_slots(date, barber_id, session)
 
 @app.post("/shifts")
-def create_shift(shift: Shift, session: Session = Depends(get_session)): # Ideally protect this too
+def create_shift(shift: Shift, session: Session = Depends(get_session)):
     # Remove existing shift for that day if any
     statement = select(Shift).where(
         Shift.barber_id == shift.barber_id, 
@@ -196,22 +196,47 @@ def book_appointment(barber_id: int, date: str, time: str, name: str, session: S
     session.commit()
     return {"message": "Booking successful"}
 
-@app.get("/appointments", response_model=List[Appointment])
-def get_all_appointments(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
-    if current_user.role == "owner":
-        return session.exec(select(Appointment)).all()
-    elif current_user.role == "barber":
-        if current_user.barber_id:
-             return session.exec(select(Appointment).where(Appointment.barber_id == current_user.barber_id)).all()
-        else:
-            return [] # Barber user but not linked to a barber?
-    return []
+@app.get("/appointments")
+def get_all_appointments(session: Session = Depends(get_session)):
+    # Public for now (Phase 1)
+    statement = select(Appointment, Barber).where(Appointment.barber_id == Barber.id)
+    results = session.exec(statement).all()
+    # Return a custom structure
+    return [
+        {
+            "id": appt.id,
+            "barber_id": appt.barber_id,
+            "customer_name": appt.customer_name,
+            "time_slot": appt.time_slot,
+            "barber_name": barber.name
+        } 
+        for appt, barber in results
+    ]
+
+@app.get("/admin/stats")
+def get_admin_stats(session: Session = Depends(get_session)):
+    # Public for now (Phase 1)
+    
+    # Total appointments
+    total_bookings = session.exec(select(Appointment)).all()
+    count = len(total_bookings)
+    
+    # Revenue (assuming $25 per cut)
+    revenue = count * 25
+    
+    # Active Barbers
+    barbers = session.exec(select(Barber).where(Barber.is_active == True)).all()
+    active_barbers = len(barbers)
+
+    return {
+        "total_bookings": count,
+        "revenue": revenue,
+        "active_barbers": active_barbers
+    }
 
 @app.delete("/appointments/{appt_id}")
-def delete_appointment(appt_id: int, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
-    if current_user.role != "owner":
-        raise HTTPException(status_code=403, detail="Not authorized")
-        
+def delete_appointment(appt_id: int, session: Session = Depends(get_session)):
+    # Public for now (Phase 1)
     appt = session.get(Appointment, appt_id)
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")

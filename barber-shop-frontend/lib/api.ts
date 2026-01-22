@@ -1,5 +1,17 @@
-// API Helper Functions
-// Replace these mock implementations with your actual FastAPI endpoints
+// lib/api.ts
+
+export const BASE_URL = "http://localhost:8000"
+
+export async function login(formData: FormData) {
+  const res = await fetch(`${BASE_URL}/token`, {
+    method: "POST",
+    body: formData,
+  })
+  if (!res.ok) throw new Error("Auth failed")
+  return res.json()
+}
+
+// --- Interfaces ---
 
 export interface Barber {
   id: number
@@ -15,38 +27,44 @@ export interface BookingPayload {
   service_type?: string
 }
 
-const BASE_URL = "http://127.0.0.1:8000"
+// Added for Admin Dashboard
+export interface Appointment {
+  id: number
+  barber_id: number
+  barber_name: string
+  customer_name: string
+  time_slot: string // ISO string or "2024-01-20 10:00"
+}
 
-/**
- * Fetch all available barbers
- */
+// Added for Shift Management
+export interface ShiftPayload {
+  barber_id: number
+  weekday: number
+  start_hour: number
+  end_hour: number
+}
+
+// --- PUBLIC FUNCTIONS (Customer) ---
+
 export async function fetchBarbers(): Promise<Barber[]> {
   const response = await fetch(`${BASE_URL}/barbers`)
-  if (!response.ok) {
-    throw new Error('Failed to fetch barbers')
-  }
+  if (!response.ok) throw new Error('Failed to fetch barbers')
   return response.json()
 }
 
-/**
- * Fetch available time slots for a barber on a specific date
- */
 export async function fetchSlots(barberId: number, date: string): Promise<string[]> {
   const response = await fetch(`${BASE_URL}/slots?barber_id=${barberId}&date=${date}`)
-  if (!response.ok) {
-    throw new Error('Failed to fetch slots')
-  }
+  if (!response.ok) throw new Error('Failed to fetch slots')
   return response.json()
 }
 
-/**
- * Submit a booking
- */
 export async function submitBooking(payload: BookingPayload): Promise<{ success: boolean; message: string }> {
   try {
-    const response = await fetch(`${BASE_URL}/book?barber_id=${payload.barber_id}&date=${payload.date}&time=${payload.time}&name=${payload.customer_name}`, {
+    // UPDATED: Sending as JSON body is cleaner than query parameters
+    const response = await fetch(`${BASE_URL}/book`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
     })
 
     if (response.ok) {
@@ -59,4 +77,50 @@ export async function submitBooking(payload: BookingPayload): Promise<{ success:
     console.error(error)
     return { success: false, message: 'Network error' }
   }
+}
+
+// Helper to get auth headers
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem("token")
+  return token ? { "Authorization": `Bearer ${token}` } : {}
+}
+
+// --- ADMIN FUNCTIONS (New) ---
+
+export async function fetchAppointments(): Promise<Appointment[]> {
+  const res = await fetch(`${BASE_URL}/appointments`, { // Endpoint was /appointments not /admin/appointments
+    headers: { ...getAuthHeaders() }
+  })
+  if (!res.ok) throw new Error("Failed to fetch appointments")
+  return res.json()
+}
+
+export async function cancelAppointment(appointmentId: number) {
+  const res = await fetch(`${BASE_URL}/appointments/${appointmentId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() }
+  })
+  if (!res.ok) throw new Error("Failed to cancel appointment")
+  return res.json()
+}
+
+export async function updateShift(payload: ShiftPayload) {
+  const res = await fetch(`${BASE_URL}/shifts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error("Failed to update shift")
+  return res.json()
+}
+
+export async function fetchStats() {
+  const res = await fetch(`${BASE_URL}/admin/stats`, {
+    headers: { ...getAuthHeaders() }
+  })
+  if (!res.ok) throw new Error("Failed to fetch stats")
+  return res.json()
 }
