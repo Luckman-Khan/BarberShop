@@ -3,11 +3,30 @@
 export const BASE_URL = "http://localhost:8000"
 
 export async function login(formData: FormData) {
-  const res = await fetch(`${BASE_URL}/token`, {
+  const res = await fetch(`${BASE_URL}/login`, {
     method: "POST",
     body: formData,
   })
   if (!res.ok) throw new Error("Auth failed")
+  return res.json()
+}
+
+// --- BARBER DASHBOARD ---
+
+export async function toggleStatus() {
+  const res = await fetch(`${BASE_URL}/barber/toggle-status`, {
+    method: "POST",
+    headers: { ...getAuthHeaders() }
+  })
+  if (!res.ok) throw new Error("Failed to toggle status")
+  return res.json()
+}
+
+export async function fetchBarberStats() {
+  const res = await fetch(`${BASE_URL}/barber/dashboard-stats`, {
+    headers: { ...getAuthHeaders() }
+  })
+  if (!res.ok) throw new Error("Failed to fetch stats")
   return res.json()
 }
 

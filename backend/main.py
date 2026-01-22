@@ -3,21 +3,20 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from datetime import datetime, timedelta
 from typing import List, Optional
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from .database import create_db_and_tables, get_session
-from .models import Barber, Appointment, Shift, User
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 import os
 
-# Auth Configuration
-SECRET_KEY = "mysecretkey" # In production, use env var
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+from backend.database import create_db_and_tables, get_session
+from backend.models import Barber, Appointment, Shift
+from backend.auth import (
+    verify_password, 
+    create_access_token, 
+    get_current_barber, 
+    get_current_admin
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# (SECRET_KEY defined in auth.py, we can reuse or just use auth functions)
 
 app = FastAPI()
 
@@ -35,82 +34,25 @@ static_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 if os.path.exists(static_path):
     app.mount("/static", StaticFiles(directory=static_path), name="static")
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-async def get_current_user(token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    user = session.exec(select(User).where(User.username == username)).first()
-    if user is None:
-        raise credentials_exception
-    return user
-
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
-    # Create initial Barbers and Users if not exist
-    with Session(get_session().__next__().bind) as session: # Hacky way to get session inside startup
-        if not session.exec(select(Barber)).first():
-            b1 = Barber(name="Alice")
-            b2 = Barber(name="Bob")
-            session.add(b1)
-            session.add(b2)
-            session.commit()
-            session.refresh(b1)
-        
-        # Check and create Users
-        if not session.exec(select(User)).first():
-            # Ensure we have a barber for linking (Alice)
-            alice = session.exec(select(Barber).where(Barber.name == "Alice")).first()
-            alice_id = alice.id if alice else None
-            
-            # Owner
-            owner = User(username="owner", password_hash=get_password_hash("pass"), role="owner")
-            session.add(owner)
-            
-            # Barber User (Alice)
-            if alice_id:
-                barber_user = User(username="alice", password_hash=get_password_hash("pass"), role="barber", barber_id=alice_id)
-                session.add(barber_user)
-            
-            session.commit()
+    # Seeding is handled by seed_data.py now
 
-@app.post("/token")
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
-    user = session.exec(select(User).where(User.username == form_data.username)).first()
-    if not user or not verify_password(form_data.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer", "role": user.role}
-
+@app.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
+    statement = select(Barber).where(Barber.username == form_data.username)
+    barber = session.exec(statement).first()
+    
+    if not barber or not verify_password(form_data.password, barber.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+    
+    access_token = create_access_token(data={"sub": barber.username})
+    return {"access_token": access_token, "token_type": "bearer", "role": barber.role, "name": barber.name}
+    
 @app.get("/users/me")
-async def read_users_me(current_user: User = Depends(get_current_user)):
-    return current_user
+def read_users_me(current_barber: Barber = Depends(get_current_barber)):
+    return current_barber
 
 def get_smart_slots(date_str: str, barber_id: int, session: Session):
     # 1. Determine Weekday (0=Mon, 6=Sun)
@@ -234,9 +176,49 @@ def get_admin_stats(session: Session = Depends(get_session)):
         "active_barbers": active_barbers
     }
 
+@app.post("/barber/toggle-status")
+def toggle_status(current_barber: Barber = Depends(get_current_barber), session: Session = Depends(get_session)):
+    current_barber.is_checked_in = not current_barber.is_checked_in
+    session.add(current_barber)
+    session.commit()
+    session.refresh(current_barber)
+    return {"status": "checked_in" if current_barber.is_checked_in else "checked_out"}
+
+@app.get("/barber/dashboard-stats")
+def get_barber_stats(current_barber: Barber = Depends(get_current_barber), session: Session = Depends(get_session)):
+    # 1. Customers Served Today
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    statement = select(Appointment).where(
+        Appointment.barber_id == current_barber.id,
+        Appointment.time_slot >= today_start
+    )
+    todays_appointments = session.exec(statement).all()
+    count = len(todays_appointments)
+    
+    # 2. Earnings
+    earnings = count * 25
+    
+    # 3. Queue Duration
+    now = datetime.now()
+    future_appts = [a for a in todays_appointments if a.time_slot > now]
+    if future_appts:
+        last_appt_end = max([a.time_slot for a in future_appts]) + timedelta(minutes=30)
+        duration = (last_appt_end - now).seconds // 60
+    else:
+        duration = 0
+
+    return {
+        "customers_served_today": count,
+        "total_earned_today": earnings,
+        "queue_duration_minutes": duration,
+        "is_checked_in": current_barber.is_checked_in,
+        "name": current_barber.name
+    }
+
 @app.delete("/appointments/{appt_id}")
 def delete_appointment(appt_id: int, session: Session = Depends(get_session)):
-    # Public for now (Phase 1)
+    # Public for now (Phase 1/2) - Ideally protect with get_current_admin later
     appt = session.get(Appointment, appt_id)
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")

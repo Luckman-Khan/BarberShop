@@ -1,14 +1,11 @@
 # backend/seed_data.py
-from sqlmodel import Session, select, SQLModel, create_engine
-from models import Barber, Shift  # Make sure these import match your file names
+from sqlmodel import Session, select, SQLModel
+from backend.models import Barber, Shift, Appointment
+from backend.database import engine, create_db_and_tables
 
-# 1. Connect to your DB
-sqlite_file_name = "barbershop.db"
-sqlite_url = f"sqlite:///{sqlite_file_name}"
-engine = create_engine(sqlite_url)
+# No need to recreate engine here, use the one from database.py
 
-def create_db_and_tables():
-    SQLModel.metadata.create_all(engine)
+from backend.auth import get_password_hash
 
 def seed_data():
     with Session(engine) as session:
@@ -20,10 +17,37 @@ def seed_data():
 
         print("🌱 Seeding Database...")
 
-        # 2. Create Barbers
-        barber1 = Barber(name="Tomy Jones", photo_url="https://i.pravatar.cc/150?u=1")
-        barber2 = Barber(name="Mike Wilson", photo_url="https://i.pravatar.cc/150?u=2")
-        barber3 = Barber(name="Jake Martinez", photo_url="https://i.pravatar.cc/150?u=3")
+        # 2. Create Barbers with Auth
+        # Admin User (also a barber for simplicity or separate?) 
+        # Requirement: "Barber Dashboard" -> separate dashboard.
+        # Let's make "Tomy" an admin, others regular.
+        
+        pwd = get_password_hash("password") # Default password for all
+        
+        barber1 = Barber(
+            name="Tomy Jones", 
+            photo_url="https://i.pravatar.cc/150?u=1",
+            username="tomy",
+            hashed_password=pwd,
+            role="admin",
+            is_checked_in=True
+        )
+        barber2 = Barber(
+            name="Mike Wilson", 
+            photo_url="https://i.pravatar.cc/150?u=2",
+            username="mike",
+            hashed_password=pwd,
+            role="barber",
+            is_checked_in=False
+        )
+        barber3 = Barber(
+            name="Jake Martinez", 
+            photo_url="https://i.pravatar.cc/150?u=3",
+            username="jake",
+            hashed_password=pwd,
+            role="barber",
+            is_checked_in=False
+        )
         
         session.add(barber1)
         session.add(barber2)
@@ -43,7 +67,7 @@ def seed_data():
                 session.add(shift)
         
         session.commit()
-        print("✅ Success! Added 3 Barbers and standard 9-5 Shifts.")
+        print("✅ Success! Added 3 Barbers (with logins) and standard 9-5 Shifts.")
 
 if __name__ == "__main__":
     create_db_and_tables() # Uncomment if you need to create tables from scratch
